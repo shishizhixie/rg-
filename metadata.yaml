@@ -1,0 +1,13 @@
+name: astrbot_plugin_personality_core
+desc: 人格核心插件 - Planner(思考) + 9维情绪系统 + 个体特征
+version: 1.0.0
+author: shishizhixie
+repo: https://github.com/shishizhixie/astrbot_plugin_personality_core
+display_name: 人格核心
+short_desc: 让AI具有情绪、思考和个性
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - lark
+  - telegram
+  - discord
