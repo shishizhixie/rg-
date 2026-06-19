@@ -51,6 +51,16 @@ EMOTION_CN = {
     "loneliness": "🥺孤独", "gratitude": "🙏感激", "relief": "😌释然",
     "possessiveness": "🔐占有欲",
 }
+# 中文 → 英文 key 映射（兼容 LLM 偶尔输出中文的情况）
+_EMOTION_CN2EN: dict[str, str] = {}
+for _ek, _ev in EMOTION_CN.items():
+    _cn = re.sub(r'[^\u4e00-\u9fff]', '', _ev)  # 去 emoji
+    _EMOTION_CN2EN[_cn] = _ek
+# 补充常见 LLM 变体
+_EMOTION_CN2EN.update({
+    "喜悦": "joy", "爱意": "love", "安心": "relief", "占有": "possessiveness",
+    "贪吃": "lewdness",
+})
 DEFAULT_EMOTIONS = {
     "joy": 50, "sadness": 10, "anger": 10, "fear": 10,
     "surprise": 20, "love": 30, "boredom": 10,
@@ -139,18 +149,21 @@ class EmotionState:
             self._save()
 
     def update_all(self, target: dict):
-        """LLM 自评更新：直接覆盖所有维度"""
+        """LLM 自评更新：直接覆盖所有维度（兼容中文 key）"""
         with self._lock:
             changed = False
-            for k in EMOTION_DIMS:
-                if k in target:
-                    try:
-                        v = max(0, min(100, int(target[k])))
-                    except (ValueError, TypeError):
-                        continue
-                    if v != self.state.get(k):
-                        self.state[k] = v
-                        changed = True
+            for k, v in target.items():
+                # 中文 key → 英文 key
+                en_key = _EMOTION_CN2EN.get(k, k)
+                if en_key not in EMOTION_DIMS:
+                    continue
+                try:
+                    nv = max(0, min(100, int(v)))
+                except (ValueError, TypeError):
+                    continue
+                if nv != self.state.get(en_key):
+                    self.state[en_key] = nv
+                    changed = True
             self.last_update = time.time()
         if changed:
             self._save()
