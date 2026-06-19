@@ -682,7 +682,7 @@ class PersonalityCorePlugin(Star):
             "然后【思考】计划→【回复】最终。例："
             "【思考】她心情不好，哄哄她。"
             "【回复】别生气了～"
-            "不要省略思考。\n"
+            "【回复】标记必须出现，不要省略。\n"
         )
         req.extra_user_content_parts.append(TextPart(text=injection).mark_as_temp())
 
@@ -728,7 +728,15 @@ class PersonalityCorePlugin(Star):
                     text = re.sub(r'【思考】\s*.*?(?=【回复】)', '', text, flags=re.DOTALL)
                     text = re.sub(r'【回复】\s*', '', text)
                 else:
-                    text = re.sub(r'【思考】\s*', '', text)
+                    # 无【回复】→ 尝试自然边界分离思考/回复
+                    after_think = re.sub(r'【思考】\s*', '', text, count=1)
+                    # 按双换行分离：第一段=思考，后面=回复
+                    parts = after_think.split('\n\n', 1)
+                    if len(parts) == 2 and len(parts[0]) < 500:
+                        text = parts[1]  # 只保留回复
+                    else:
+                        # 没明显分隔 → 全删（纯 CoT/agent 输出）
+                        text = ''
             text = text.strip()
 
         # 0.5) 清理 LLM 可能 echo 回来的注入文案
