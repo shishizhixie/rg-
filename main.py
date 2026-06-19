@@ -79,8 +79,8 @@ DECAY_RATES = {
 # ═══════════════════════════════════════════════
 
 class EmotionState:
-    def __init__(self, data_dir: str):
-        self.state_path = os.path.join(data_dir, "emotion_state.json")
+    def __init__(self, data_dir: str, filename: str = "emotion_state.json"):
+        self.state_path = os.path.join(data_dir, filename)
         os.makedirs(data_dir, exist_ok=True)
         self.state = dict(DEFAULT_EMOTIONS)
         self.last_update = time.time()
@@ -421,16 +421,16 @@ class PersonalityCorePlugin(Star):
         self.data_dir = data_dir
 
         # 配置
-        self._cfg = {"enabled": True, "session_based": False}
+        self._cfg = {"enabled": True}
         manual_path = os.path.join(data_dir, "config.json")
         try:
             with open(manual_path, encoding="utf-8") as f:
                 self._cfg.update(json.load(f))
         except (FileNotFoundError, json.JSONDecodeError):
             pass
-        for key in ("enabled", "session_based"):
+        for key in ("enabled",):
             if config and key in config and config[key] is not None:
-                self._cfg[key] = config[key] if key == "enabled" else bool(config[key])
+                self._cfg[key] = config[key]
         with open(manual_path, "w", encoding="utf-8") as f:
             json.dump(self._cfg, f, indent=2, ensure_ascii=False)
 
@@ -453,16 +453,25 @@ class PersonalityCorePlugin(Star):
             pass
 
         # 子系统
-        self.emotion = EmotionState(data_dir)
-        self.emotion.start_decay_loop(interval=1.0)
+        self.emotions: dict = {}  # session_id → EmotionState
         self.persona = Persona(data_dir)
         self.favor = FavorManager(data_dir)
         self.enabled = self._cfg.get("enabled", True)
 
         logger.info(f"人格核心: 融合版已加载 | 情绪={'启用' if self.enabled else '禁用'} | 好感=已集成")
 
-    def _get_session_id(self, event: AstrMessageEvent) -> str | None:
-        return event.unified_msg_origin if self._cfg.get("session_based", False) else None
+    def _get_session_id(self, event: AstrMessageEvent) -> str:
+        """永远按会话隔离"""
+        return event.unified_msg_origin
+
+    def _get_emotion(self, session_id: str) -> EmotionState:
+        """按会话懒加载情绪实例"""
+        if session_id not in self.emotions:
+            safe_id = re.sub(r'[<>:"/\\|?*]', '_', str(session_id))
+            self.emotions[session_id] = EmotionState(
+                self.data_dir, f"emotion_state_{safe_id}.json"
+            )
+        return self.emotions[session_id]
 
     # ── LLM 请求钩子 ──
 
@@ -483,12 +492,16 @@ class PersonalityCorePlugin(Star):
         if message_text.strip().startswith(plugin_cmds):
             return
 
-        # 关键词微调（快速响应，LLM 自评会补充修正）
-        self.emotion.update_by_message(message_text)
-
-        # 获取用户好感度（含会话隔离）
+        # 获取会话（必须提前，因为情绪是 per-session 的）
         user_id = event.get_sender_id()
         session_id = self._get_session_id(event)
+        emo = self._get_emotion(session_id)
+        emo.start_decay_loop(interval=1.0)
+
+        # 关键词微调（快速响应，LLM 自评会补充修正）
+        emo.update_by_message(message_text)
+
+        # 获取用户好感度（按会话隔离）
         favor_prompt = self.favor.to_prompt(user_id, session_id)
         favor_val = self.favor.get(user_id, session_id)["favour"]
 
@@ -510,8 +523,8 @@ class PersonalityCorePlugin(Star):
             prompt_ger += "\n现在开始可以爆粗口。"
 
         # 按好感度生成回复规则
-        emo = self.emotion.to_dict()
-        possess = emo.get("possessiveness", 0)
+        emo_dict = emo.to_dict()
+        possess = emo_dict.get("possessiveness", 0)
         if favor_val >= 100 and possess >= 100:
             reply_rule = "病娇模式：偏执占有，疯狂依赖，控制欲极强，你是我的。"
         elif favor_val >= 75:
@@ -529,19 +542,19 @@ class PersonalityCorePlugin(Star):
 
         # 情绪阈值行为
         emo_hints = []
-        if emo.get("anger", 0) > 70:
+        if emo_dict.get("anger", 0) > 70:
             emo_hints.append("你现在非常愤怒")
-        if emo.get("sadness", 0) > 70:
+        if emo_dict.get("sadness", 0) > 70:
             emo_hints.append("你现在非常悲伤")
-        if emo.get("joy", 0) < 10:
+        if emo_dict.get("joy", 0) < 10:
             emo_hints.append("你现在心情很差，什么都不想说")
-        if emo.get("fear", 0) > 70:
+        if emo_dict.get("fear", 0) > 70:
             emo_hints.append("你现在非常恐惧")
-        if emo.get("loneliness", 0) > 65:
+        if emo_dict.get("loneliness", 0) > 65:
             emo_hints.append("你现在感到很孤独，渴望有人陪你")
-        if emo.get("lewdness", 0) > 70:
+        if emo_dict.get("lewdness", 0) > 70:
             emo_hints.append("你现在情欲高涨")
-        if emo.get("distrust", 0) > 60:
+        if emo_dict.get("distrust", 0) > 60:
             emo_hints.append("你非常不信任对方")
         if possess > 75 and favor_val >= 60:
             emo_hints.append("占有欲极强，不想让别人碰他")
@@ -551,7 +564,7 @@ class PersonalityCorePlugin(Star):
         # 注入指令
         injection = (
             "<personality_core>\n"
-            f"心情:{self.emotion.to_json_str()}\n"
+            f"心情:{emo.to_json_str()}\n"
             f"{favor_prompt}\n"
             "</personality_core>\n"
             f"态度({favor_val})：{reply_rule}"
@@ -567,7 +580,7 @@ class PersonalityCorePlugin(Star):
         req.extra_user_content_parts.append(TextPart(text=injection).mark_as_temp())
 
         logger.info(
-            f"🧠 注入思考 | 情绪={self.emotion.to_json_str()} | "
+            f"🧠 注入思考 | 情绪={emo.to_json_str()} | "
             f"好感={self.favor.get(user_id, session_id)['favour']}"
         )
 
@@ -609,7 +622,8 @@ class PersonalityCorePlugin(Star):
         if emo_match:
             try:
                 emo_data = json.loads(emo_match.group(1))
-                self.emotion.update_all(emo_data)
+                # 用响应钩子里的 session（需要提前获取）
+                self._get_emotion(self._get_session_id(event)).update_all(emo_data)
                 logger.info(f"📊 情绪自评: {emo_data}")
             except (json.JSONDecodeError, KeyError, TypeError):
                 logger.warning(f"⚠️ 情绪标签解析失败: {emo_match.group(1)}")
@@ -652,6 +666,7 @@ class PersonalityCorePlugin(Star):
     async def cmd_status(self, event: AstrMessageEvent):
         user_id = event.get_sender_id()
         session_id = self._get_session_id(event)
+        emo = self._get_emotion(session_id)
         f = self.favor.get(user_id, session_id)
         lines = [
             "🎭 人格核心 (融合版)",
@@ -661,7 +676,7 @@ class PersonalityCorePlugin(Star):
             f"🔘 你的人格核心: {'启用' if not self.disabled_users.get(user_id, False) else '禁用'}",
             "",
             "💖 当前情绪:",
-            self.emotion.to_prompt(),
+            emo.to_prompt(),
             "",
             f"🔗 你对当前用户的态度:",
             f"   好感度: {f['favour']}",
@@ -673,7 +688,8 @@ class PersonalityCorePlugin(Star):
 
     @filter.command("情绪重置")
     async def cmd_reset_emotions(self, event: AstrMessageEvent):
-        self.emotion.reset()
+        session_id = self._get_session_id(event)
+        self._get_emotion(session_id).reset()
         yield event.plain_result("🔄 情绪已重置为默认值")
         event.stop_event()
 

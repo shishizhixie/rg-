@@ -2,13 +2,7 @@
   "enabled": {
     "description": "启用插件",
     "type": "bool",
-    "hint": "关闭后不再注入情绪和人格，已有数据保留",
+    "hint": "关闭后不再注入情绪和人格，情绪/好感数据保留",
     "default": true
-  },
-  "session_based": {
-    "description": "会话独立好感度",
-    "type": "bool",
-    "hint": "开启后每个群聊/私聊的好感度独立计算，关闭则全局统一",
-    "default": false
   }
 }
