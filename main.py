@@ -833,45 +833,53 @@ class PersonalityCorePlugin(Star):
 
     @filter.command("设置好感")
     async def cmd_set_favor(self, event: AstrMessageEvent, user_id: str = "", favour: str = ""):
-        """设置好感度。用法: 设置好感 数值 或 设置好感 user_id 数值"""
+        """设置好感度。用法: 设置好感 数值 或 设置好感 QQ号/昵称 数值"""
+        text = event.message_str.strip()
+        for p in ["设置好感", "/设置好感"]:
+            if text.startswith(p):
+                text = text[len(p):].strip()
+                break
+        parts = text.split()
+        
         fv = None
         target_user = None
-
-        # 情况1: favor 有值 → 用户指定了目标user_id
-        if favour:
+        if len(parts) == 1:
+            # 设置好感 50 → 设自己
             try:
-                fv = max(-100, min(100, int(favour)))
-                target_user = user_id if user_id else event.get_sender_id()
+                fv = max(-100, min(100, int(parts[0])))
+                target_user = event.get_sender_id()
             except ValueError:
                 yield event.plain_result("❌ 好感度必须是整数 (-100~100)")
                 event.stop_event()
                 return
-        else:
-            # 解析文本
-            text = event.message_str.strip()
-            for p in ["设置好感", "/设置好感"]:
-                if text.startswith(p):
-                    text = text[len(p):].strip()
-                    break
-            parts = text.split()
-            if len(parts) == 1:
-                # 设置好感 50 → 设自己
-                try:
-                    fv = max(-100, min(100, int(parts[0])))
-                    target_user = event.get_sender_id()
-                except ValueError:
-                    yield event.plain_result("❌ 好感度必须是整数 (-100~100)")
-                    event.stop_event()
-                    return
-            elif len(parts) >= 2:
-                # 设置好感 user_id 50
-                try:
-                    fv = max(-100, min(100, int(parts[1])))
-                    target_user = parts[0]
-                except ValueError:
-                    yield event.plain_result("❌ 好感度必须是整数 (-100~100)")
-                    event.stop_event()
-                    return
+        elif len(parts) >= 2:
+            # 设置好感 QQ号/昵称 50
+            try:
+                fv = max(-100, min(100, int(parts[-1])))
+            except ValueError:
+                yield event.plain_result("❌ 好感度必须是整数 (-100~100)")
+                event.stop_event()
+                return
+            name_or_id = " ".join(parts[:-1])
+            # 纯数字 → QQ号直接用
+            if name_or_id.isdigit():
+                target_user = name_or_id
+            else:
+                # 尝试从昵称反查 user_id
+                found = None
+                for uid, nick in self.nicknames.items():
+                    if nick == name_or_id:
+                        found = uid
+                        break
+                if found:
+                    target_user = found
+                else:
+                    # 模糊匹配
+                    for uid, nick in self.nicknames.items():
+                        if name_or_id in nick:
+                            found = uid
+                            break
+                    target_user = found or name_or_id
 
         if fv is None or not target_user:
             yield event.plain_result("用法: 设置好感 数值 或 设置好感 user_id 数值\n数值范围 -100 ~ 100")
