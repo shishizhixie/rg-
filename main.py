@@ -598,6 +598,12 @@ class PersonalityCorePlugin(Star):
                 text = text.replace(think_match.group(0), "").strip()
                 text = re.sub(r'【回复】\s*', '', text).strip()
 
+        # 0.5) 清理 LLM 可能 echo 回来的注入文案
+        text = re.sub(r'<personality_core>[\s\S]*?</personality_core>', '', text)
+        text = re.sub(r'心情\s*[:：]\s*\{[^}]+\}', '', text)
+        text = re.sub(r'如果用户需要调用工具.*?(?=\n|$)', '', text)
+        text = text.strip()
+
         # 1) 解析情绪标签 [Emotion: {...}]
         emo_match = self.EMOTION_PATTERN.search(text)
         if emo_match:
