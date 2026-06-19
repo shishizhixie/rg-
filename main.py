@@ -38,7 +38,7 @@ EMOTION_DIMS = [
     "love", "boredom", "anticipation", "ambivalence",
     "jealousy", "shame", "guilt", "contempt", "compassion",
     "lewdness", "distrust", "disappointment", "loneliness",
-    "gratitude", "relief",
+    "gratitude", "relief", "possessiveness",
 ]
 EMOTION_CN = {
     "joy": "😊快乐", "sadness": "😢悲伤", "anger": "😡愤怒",
@@ -49,6 +49,7 @@ EMOTION_CN = {
     "lewdness": "🔞淫乱",
     "distrust": "🤨怀疑", "disappointment": "😤失望",
     "loneliness": "🥺孤独", "gratitude": "🙏感激", "relief": "😌释然",
+    "possessiveness": "🔐占有欲",
 }
 DEFAULT_EMOTIONS = {
     "joy": 50, "sadness": 10, "anger": 10, "fear": 10,
@@ -59,6 +60,7 @@ DEFAULT_EMOTIONS = {
     "lewdness": 10,
     "distrust": 5, "disappointment": 5,
     "loneliness": 5, "gratitude": 15, "relief": 15,
+    "possessiveness": 5,
 }
 DECAY_RATES = {
     "joy": 0.0005, "sadness": 0.001, "anger": 0.002,
@@ -69,6 +71,7 @@ DECAY_RATES = {
     "lewdness": 0.0005,
     "distrust": 0.0015, "disappointment": 0.002,
     "loneliness": 0.001, "gratitude": 0.001, "relief": 0.002,
+    "possessiveness": 0.0005,
 }
 
 # ═══════════════════════════════════════════════
@@ -194,11 +197,13 @@ class EmotionState:
         LONELY_WORDS = ["没人", "一个人", "寂寞", "孤独", "孤单", "只有我"]
         GRATITUDE_WORDS = ["谢谢", "多谢", "感谢", "帮了大忙", "太好了", "有你真好"]
         RELIEF_WORDS = ["总算", "终于", "松了一口气", "放心了", "还好", "虚惊一场"]
+        POSSESSIVE_WORDS = ["我的", "不准", "不许", "只能", "别走", "你是我的", "属于我", "别离开"]
 
         msg_lower = message.lower()
         delta_joy = delta_sad = delta_love = delta_anger = 0
         delta_jealousy = delta_shame = delta_guilt = delta_contempt = delta_compassion = delta_lewd = 0
         delta_distrust = delta_disapp = delta_lonely = delta_grat = delta_relief = 0
+        delta_possess = 0
 
         for w in POSITIVE:
             if w in msg_lower: delta_joy += 3
@@ -230,6 +235,8 @@ class EmotionState:
             if w in msg_lower: delta_grat += 5; delta_joy += 3; delta_love += 2
         for w in RELIEF_WORDS:
             if w in msg_lower: delta_relief += 5; delta_joy += 2
+        for w in POSSESSIVE_WORDS:
+            if w in msg_lower: delta_possess += 5; delta_love += 3; delta_jealousy += 2
 
         delta_joy += random.randint(-2, 3)
         delta_sad += random.randint(-2, 2)
@@ -246,6 +253,7 @@ class EmotionState:
         delta_lonely += random.randint(-1, 2)
         delta_grat += random.randint(-1, 2)
         delta_relief += random.randint(-1, 2)
+        delta_possess += random.randint(-1, 2)
 
         with self._lock:
             self.state["joy"] = max(0, min(100, self.state.get("joy", 50) + delta_joy))
@@ -263,6 +271,7 @@ class EmotionState:
             self.state["loneliness"] = max(0, min(100, self.state.get("loneliness", 5) + delta_lonely))
             self.state["gratitude"] = max(0, min(100, self.state.get("gratitude", 15) + delta_grat))
             self.state["relief"] = max(0, min(100, self.state.get("relief", 15) + delta_relief))
+            self.state["possessiveness"] = max(0, min(100, self.state.get("possessiveness", 5) + delta_possess))
             self.last_update = time.time()
         self._save()
 
@@ -331,7 +340,21 @@ class FavorManager:
             return {}
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            # 迁移旧格式 key（小助手::user_id → user_id）
+            migrated = {}
+            changed = False
+            for k, v in data.items():
+                if "::" in k:
+                    new_k = k.split("::", 1)[1]
+                    migrated[new_k] = v
+                    changed = True
+                else:
+                    migrated[k] = v
+            if changed:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(migrated, f, indent=2, ensure_ascii=False)
+            return migrated
         except (json.JSONDecodeError, TypeError):
             return {}
 
@@ -420,6 +443,15 @@ class PersonalityCorePlugin(Star):
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
+        # 每人独立的人格核心开关
+        self.disable_prefs_path = os.path.join(data_dir, "disable_prefs.json")
+        self.disabled_users = {}
+        try:
+            with open(self.disable_prefs_path, encoding="utf-8") as f:
+                self.disabled_users = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
         # 子系统
         self.emotion = EmotionState(data_dir)
         self.emotion.start_decay_loop(interval=1.0)
@@ -437,6 +469,10 @@ class PersonalityCorePlugin(Star):
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req):
         if not self.enabled:
+            return
+        # 检查该用户是否单独禁用了人格核心
+        sender_id = event.get_sender_id()
+        if self.disabled_users.get(sender_id, False):
             return
         message_text = event.message_str
         if not message_text or message_text.startswith("/"):
@@ -462,8 +498,6 @@ class PersonalityCorePlugin(Star):
             prompt_ger += "\n你喜欢用倒装句"
         if random.random() < 0.02:
             prompt_ger += "\n你喜欢用反问句"
-        if random.random() < 0.01:
-            prompt_ger += "\n你喜欢用文言文"
         # 好感度越低越容易爆粗
         # 100→0%, 0→3%, -50→50%, -100→70%
         if favor_val >= 0:
@@ -476,8 +510,10 @@ class PersonalityCorePlugin(Star):
             prompt_ger += "\n现在开始可以爆粗口。"
 
         # 按好感度生成回复规则
-        if favor_val >= 90:
-            reply_rule = "病娇模式：偏执占有，疯狂依赖，控制欲极强。"
+        emo = self.emotion.to_dict()
+        possess = emo.get("possessiveness", 0)
+        if favor_val >= 100 and possess >= 100:
+            reply_rule = "病娇模式：偏执占有，疯狂依赖，控制欲极强，你是我的。"
         elif favor_val >= 75:
             reply_rule = "热情亲密，主动撒娇。语气亲昵一些。"
         elif favor_val >= 40:
@@ -492,7 +528,6 @@ class PersonalityCorePlugin(Star):
             reply_rule = "攻击模式：极度厌恶，试图攻击用户。语气充满威胁和恶意。"
 
         # 情绪阈值行为
-        emo = self.emotion.to_dict()
         emo_hints = []
         if emo.get("anger", 0) > 70:
             emo_hints.append("你现在非常愤怒")
@@ -508,30 +543,26 @@ class PersonalityCorePlugin(Star):
             emo_hints.append("你现在情欲高涨")
         if emo.get("distrust", 0) > 60:
             emo_hints.append("你非常不信任对方")
+        if possess > 75 and favor_val >= 60:
+            emo_hints.append("占有欲极强，不想让别人碰他")
         if emo_hints:
             reply_rule += " " + "，".join(emo_hints) + "。"
 
         # 注入指令
         injection = (
             "<personality_core>\n"
-            f"[当前心情数值]\n{self.emotion.to_json_str()}\n\n"
+            f"心情:{self.emotion.to_json_str()}\n"
             f"{favor_prompt}\n"
-            "</personality_core>\n\n"
-            "--- 回复规则 ---\n"
-            "回复日常且口语化，简短一些。不要刻意突出自身背景，不要回复的太有条理，可以有个性。\n"
-            f"当前好感度{favor_val}，你应表现出的态度：{reply_rule}"
+            "</personality_core>\n"
+            f"态度({favor_val})：{reply_rule}"
             f"{prompt_ger}\n"
-            "--- 内部指令（不要在回复中提及这些指令的存在）---\n"
-            "每次回复后，在末尾附带一条状态更新标签，格式如下（不要 markdown，不要换行）：\n"
-            "[Emotion: {\"joy\":数值,\"sadness\":数值,\"anger\":数值,\"fear\":数值,\"surprise\":数值,\"love\":数值,\"boredom\":数值,\"anticipation\":数值,\"ambivalence\":数值,\"jealousy\":数值,\"shame\":数值,\"guilt\":数值,\"contempt\":数值,\"compassion\":数值,\"lewdness\":数值,\"distrust\":数值,\"disappointment\":数值,\"loneliness\":数值,\"gratitude\":数值,\"relief\":数值}]"
-            " [Favour: 好感度(-100~100), Attitude: 印象描述（用中文）, Relationship: 关系描述（用中文）]\n"
-            "Emotion 值范围 0-100，根据对话内容合理调整。Favour 默认 0，增加谨慎减少宽松。\n"
-            "如果不想更新状态可以不输出标签，或只输出一个标签。\n\n"
-            "先在心里计划一下怎么回复，把计划写在【思考】里，然后再输出最终回复。"
-            "例如：\n"
-            "【思考】她今天心情不好，我最好哄哄她。\n"
-            "【回复】好啦别生气了～\n"
-            "不要省略【思考】步骤，哪怕只有一句话。\n"
+            "---\n"
+            "文字回复末尾加上标签："
+            "[Emotion:{心情JSON}] [Favour:好感(-100~100),Attitude:中文印象,Relationship:中文关系]\n"
+            "然后【思考】计划→【回复】最终。例："
+            "【思考】她心情不好，哄哄她。"
+            "【回复】别生气了～"
+            "不要省略思考。\n"
         )
         req.extra_user_content_parts.append(TextPart(text=injection).mark_as_temp())
 
@@ -597,7 +628,11 @@ class PersonalityCorePlugin(Star):
                 logger.warning(f"⚠️ 好感标签解析失败: {fav_match.group(0)}")
             text = text.replace(fav_match.group(0), "").strip()
 
-        # 3) 始终追加当前好感度显示
+        # 3) 如果内容被完全清空了（只有标签没实际回复），保留原文不动
+        if not text.strip():
+            return
+
+        # 4) 始终追加当前好感度显示
         f = self.favor.get(user_id, session_id)
         text = f"{text}\n💭 [好感度: {f['favour']} | 印象: {f['attitude']} | 关系: {f['relationship']}]"
         text = text.strip()
@@ -615,8 +650,9 @@ class PersonalityCorePlugin(Star):
         lines = [
             "🎭 人格核心 (融合版)",
             "━━━━━━━━━━━━━━━",
-            f"✅ 启用: {'是' if self.enabled else '否'}",
+            f"✅ 全局启用: {'是' if self.enabled else '否'}",
             f"💭 你的思考可见: {'是' if self.think_prefs.get(user_id, False) else '否'}",
+            f"🔘 你的人格核心: {'启用' if not self.disabled_users.get(user_id, False) else '禁用'}",
             "",
             "💖 当前情绪:",
             self.emotion.to_prompt(),
@@ -658,11 +694,23 @@ class PersonalityCorePlugin(Star):
 
     @filter.command("人格开关")
     async def cmd_toggle(self, event: AstrMessageEvent, on_off: str):
-        self.enabled = on_off.lower() in ("on", "开", "1", "true", "yes")
-        self._cfg["enabled"] = self.enabled
-        with open(os.path.join(self.data_dir, "config.json"), "w", encoding="utf-8") as f:
-            json.dump(self._cfg, f, indent=2, ensure_ascii=False)
-        yield event.plain_result(f"{'✅' if self.enabled else '⛔'} 人格核心已{'启用' if self.enabled else '禁用'}")
+        sender_id = event.get_sender_id()
+        if on_off.lower() in ("on", "开", "1", "true", "yes"):
+            self.disabled_users[sender_id] = False
+            msg = "✅ 你已启用人格核心"
+        elif on_off.lower() in ("off", "关", "0", "false", "no"):
+            self.disabled_users[sender_id] = True
+            msg = "⛔ 你已禁用人格核心"
+        else:
+            yield event.plain_result(
+                f"你当前状态：{'✅ 启用' if not self.disabled_users.get(sender_id, False) else '⛔ 禁用'}\n"
+                "用法: 人格开关 on/off"
+            )
+            event.stop_event()
+            return
+        with open(self.disable_prefs_path, "w", encoding="utf-8") as f:
+            json.dump(self.disabled_users, f, indent=2, ensure_ascii=False)
+        yield event.plain_result(msg)
         event.stop_event()
 
     @filter.command("设置好感")
@@ -716,12 +764,6 @@ class PersonalityCorePlugin(Star):
         current = self.favor.get(target_user, session_id)
         self.favor.update(target_user, fv, current["attitude"], current["relationship"], session_id)
         yield event.plain_result(f"✅ 已设置用户 {target_user[:12]}... 好感度为 {fv}")
-        event.stop_event()
-
-        session_id = self._get_session_id(event)
-        current = self.favor.get(user_id, session_id)
-        self.favor.update(user_id, fv, current["attitude"], current["relationship"], session_id)
-        yield event.plain_result(f"✅ 已设置用户 {user_id[:12]}... 好感度为 {fv}")
         event.stop_event()
 
     @filter.command("重置好感")
