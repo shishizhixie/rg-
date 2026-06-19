@@ -495,7 +495,22 @@ class PersonalityCorePlugin(Star):
         self.favor = FavorManager(data_dir)
         self.enabled = self._cfg.get("enabled", True)
 
+        # 昵称映射 user_id → display_name（持久化）
+        self.nicknames_path = os.path.join(data_dir, "nicknames.json")
+        self.nicknames: dict[str, str] = {}
+        try:
+            with open(self.nicknames_path, encoding="utf-8") as f:
+                self.nicknames = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
         logger.info(f"人格核心: 融合版已加载 | 情绪={'启用' if self.enabled else '禁用'} | 好感=已集成")
+
+    def _save_nickname(self, user_id: str, name: str):
+        if name and name != str(user_id):
+            self.nicknames[user_id] = name[:32]
+            with open(self.nicknames_path, "w", encoding="utf-8") as f:
+                json.dump(self.nicknames, f, indent=2, ensure_ascii=False)
 
     def _get_session_id(self, event: AstrMessageEvent) -> str:
         """永远按会话隔离"""
@@ -552,6 +567,14 @@ class PersonalityCorePlugin(Star):
         session_id = self._get_session_id(event)
         emo = self._get_emotion(session_id)
         emo.start_decay_loop(interval=1.0)
+
+        # 缓存用户昵称
+        try:
+            nick = event.get_sender_nickname()
+            if nick:
+                self._save_nickname(user_id, nick)
+        except Exception:
+            pass
 
         # 定期清理废弃 session（每 20 条消息一次）
         if random.random() < 0.05:
@@ -879,8 +902,9 @@ class PersonalityCorePlugin(Star):
             user_id = event.get_sender_id()
         session_id = self._get_session_id(event)
         s = self.favor.get(user_id, session_id)
+        name = self.nicknames.get(user_id, user_id[-8:] if len(user_id) > 8 else user_id)
         yield event.plain_result(
-            f"📊 用户 {user_id[:12]}... 的好感状态:\n"
+            f"📊 {name} 的好感状态:\n"
             f"  好感度: {s['favour']} (-100~100)\n"
             f"  印象: {s['attitude']}\n"
             f"  关系: {s['relationship']}"
@@ -908,8 +932,8 @@ class PersonalityCorePlugin(Star):
             return
         lines = [f"🏆 好感度排行 TOP {n}"]
         for i, (uid, data) in enumerate(sorted_users, 1):
-            display = uid[-8:] if len(uid) > 8 else uid
-            lines.append(f"  {i}. {display} {data['favour']} ({data['attitude'][:10]})")
+            name = self.nicknames.get(uid, uid[-8:] if len(uid) > 8 else uid)
+            lines.append(f"  {i}. {name} {data['favour']} ({data['attitude'][:10]})")
         yield event.plain_result("\n".join(lines))
         event.stop_event()
 
@@ -933,8 +957,8 @@ class PersonalityCorePlugin(Star):
             return
         lines = [f"💢 负好感度排行 TOP {n}"]
         for i, (uid, data) in enumerate(sorted_users, 1):
-            display = uid[-8:] if len(uid) > 8 else uid
-            lines.append(f"  {i}. {display} {data['favour']} ({data['attitude'][:10]})")
+            name = self.nicknames.get(uid, uid[-8:] if len(uid) > 8 else uid)
+            lines.append(f"  {i}. {name} {data['favour']} ({data['attitude'][:10]})")
         yield event.plain_result("\n".join(lines))
         event.stop_event()
 
