@@ -182,9 +182,9 @@ class EmotionState:
 
     def update_by_message(self, message: str):
         """关键词微调（LLM 自评的补充/后备）"""
-        POSITIVE = ["好", "棒", "开心", "喜欢", "爱", "哈哈", "谢谢", "高兴", "笑", "赞", "好看", "厉害"]
+        POSITIVE = ["好棒", "开心", "喜欢", "哈哈", "谢谢", "高兴", "赞", "好看", "厉害"]
         NEGATIVE = ["烦死了", "讨厌", "好难", "好累", "好气", "伤心", "哭了", "无聊", "太差了", "好烂", "糟糕"]
-        LOVE_WORDS = ["想你", "爱你", "喜欢", "亲", "抱", "可爱", "贴贴", "撒娇", "宝贝"]
+        LOVE_WORDS = ["想你", "爱你", "喜欢", "亲亲", "抱抱", "可爱", "贴贴", "撒娇", "宝贝", "亲一个"]
         ANGRY_WORDS = ["滚蛋", "烦死了", "气死了", "怒了", "火大", "怼人", "骂人", "凭什么"]
         JEALOUS_WORDS = ["出轨", "背叛", "移情别恋", "看别人", "和别人", "不理我", "有别人"]
         SHAME_WORDS = ["害羞", "尴尬", "丢人", "不好意思", "丢脸", "难为情"]
@@ -198,12 +198,15 @@ class EmotionState:
         GRATITUDE_WORDS = ["谢谢", "多谢", "感谢", "帮了大忙", "太好了", "有你真好"]
         RELIEF_WORDS = ["总算", "终于", "松了一口气", "放心了", "还好", "虚惊一场"]
         POSSESSIVE_WORDS = ["我的", "不准", "不许", "只能", "别走", "你是我的", "属于我", "别离开"]
+        FEAR_WORDS = ["好怕", "吓死", "惊悚", "鬼", "好恐怖", "不敢"]
+        SURPRISE_WORDS = ["啊", "哇", "天哪", "竟然", "居然", "不可思议"]
+        BOREDOM_WORDS = ["无聊", "没意思", "好闷", "没劲"]
 
         msg_lower = message.lower()
         delta_joy = delta_sad = delta_love = delta_anger = 0
         delta_jealousy = delta_shame = delta_guilt = delta_contempt = delta_compassion = delta_lewd = 0
         delta_distrust = delta_disapp = delta_lonely = delta_grat = delta_relief = 0
-        delta_possess = 0
+        delta_possess = delta_fear = delta_surprise = delta_anticip = delta_ambiv = delta_boredom = 0
 
         for w in POSITIVE:
             if w in msg_lower: delta_joy += 3
@@ -237,6 +240,12 @@ class EmotionState:
             if w in msg_lower: delta_relief += 5; delta_joy += 2
         for w in POSSESSIVE_WORDS:
             if w in msg_lower: delta_possess += 5; delta_love += 3; delta_jealousy += 2
+        for w in FEAR_WORDS:
+            if w in msg_lower: delta_fear += 5; delta_sad += 2
+        for w in SURPRISE_WORDS:
+            if w in msg_lower: delta_surprise += 5
+        for w in BOREDOM_WORDS:
+            if w in msg_lower: delta_boredom += 4; delta_joy -= 2
 
         delta_joy += random.randint(-2, 3)
         delta_sad += random.randint(-2, 2)
@@ -254,6 +263,11 @@ class EmotionState:
         delta_grat += random.randint(-1, 2)
         delta_relief += random.randint(-1, 2)
         delta_possess += random.randint(-1, 2)
+        delta_fear += random.randint(-1, 2)
+        delta_surprise += random.randint(-1, 2)
+        delta_anticip += random.randint(-1, 2)
+        delta_ambiv += random.randint(-1, 2)
+        delta_boredom += random.randint(-1, 2)
 
         with self._lock:
             self.state["joy"] = max(0, min(100, self.state.get("joy", 50) + delta_joy))
@@ -272,6 +286,11 @@ class EmotionState:
             self.state["gratitude"] = max(0, min(100, self.state.get("gratitude", 15) + delta_grat))
             self.state["relief"] = max(0, min(100, self.state.get("relief", 15) + delta_relief))
             self.state["possessiveness"] = max(0, min(100, self.state.get("possessiveness", 5) + delta_possess))
+            self.state["fear"] = max(0, min(100, self.state.get("fear", 10) + delta_fear))
+            self.state["surprise"] = max(0, min(100, self.state.get("surprise", 20) + delta_surprise))
+            self.state["anticipation"] = max(0, min(100, self.state.get("anticipation", 30) + delta_anticip))
+            self.state["ambivalence"] = max(0, min(100, self.state.get("ambivalence", 10) + delta_ambiv))
+            self.state["boredom"] = max(0, min(100, self.state.get("boredom", 10) + delta_boredom))
             self.last_update = time.time()
         self._save()
 
@@ -406,7 +425,11 @@ class FavorManager:
 class PersonalityCorePlugin(Star):
     EMOTION_PATTERN = re.compile(r'\[Emotion\s*[:：]\s*(.*?)\]')
     FAVOUR_PATTERN = re.compile(
-        r'\[Favour\s*[:：]\s*(-?\d+)\s*[,，]\s*(?:Attitude|印象|态度)\s*[:：]\s*(.*?)\s*[,，]\s*(?:(?:Relationship|关系|关系描述)\s*[:：]\s*)?(.*?)\]'
+        r'\[Favour\s*[:：]\s*(-?\d+)\s*[,，]\s*'
+        r'(?:Attitude|印象|态度)\s*[:：]\s*'
+        r'(.*?)\s*[,，]\s*'
+        r'(?:(?:Relationship|关系|关系描述)\s*[:：]\s*)?'
+        r'([^,\]]+)\]'
     )
     THINK_PATTERN = re.compile(r'【思考】\s*(.*?)(?=【回复】|【|$)', re.DOTALL)
 
@@ -454,6 +477,7 @@ class PersonalityCorePlugin(Star):
 
         # 子系统
         self.emotions: dict = {}  # session_id → EmotionState
+        self._emotion_lock = threading.Lock()
         self.persona = Persona(data_dir)
         self.favor = FavorManager(data_dir)
         self.enabled = self._cfg.get("enabled", True)
@@ -465,13 +489,31 @@ class PersonalityCorePlugin(Star):
         return event.unified_msg_origin
 
     def _get_emotion(self, session_id: str) -> EmotionState:
-        """按会话懒加载情绪实例"""
+        """按会话懒加载情绪实例（线程安全）"""
         if session_id not in self.emotions:
-            safe_id = re.sub(r'[<>:"/\\|?*]', '_', str(session_id))
-            self.emotions[session_id] = EmotionState(
-                self.data_dir, f"emotion_state_{safe_id}.json"
-            )
+            with self._emotion_lock:
+                if session_id not in self.emotions:  # double-check
+                    safe_id = re.sub(r'[<>:"/\\|?*]', '_', str(session_id))
+                    self.emotions[session_id] = EmotionState(
+                        self.data_dir, f"emotion_state_{safe_id}.json"
+                    )
         return self.emotions[session_id]
+
+    def _prune_emotions(self, max_sessions: int = 50):
+        """清理最久未使用的 session（防止内存泄漏）"""
+        with self._emotion_lock:
+            if len(self.emotions) <= max_sessions:
+                return
+            # 按 last_update 排序，删掉最旧的
+            sorted_items = sorted(
+                self.emotions.items(),
+                key=lambda kv: kv[1].last_update
+            )
+            to_remove = sorted_items[:len(self.emotions) - max_sessions]
+            for sid, _ in to_remove:
+                del self.emotions[sid]
+            if to_remove:
+                logger.info(f"🧹 清理了 {len(to_remove)} 个废弃 session 的情绪实例")
 
     # ── LLM 请求钩子 ──
 
@@ -497,6 +539,10 @@ class PersonalityCorePlugin(Star):
         session_id = self._get_session_id(event)
         emo = self._get_emotion(session_id)
         emo.start_decay_loop(interval=1.0)
+
+        # 定期清理废弃 session（每 20 条消息一次）
+        if random.random() < 0.05:
+            self._prune_emotions(max_sessions=50)
 
         # 关键词微调（快速响应，LLM 自评会补充修正）
         emo.update_by_message(message_text)
@@ -589,6 +635,9 @@ class PersonalityCorePlugin(Star):
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: LLMResponse):
         if not self.enabled:
+            return
+        # 检查是否该用户禁用了人格核心
+        if self.disabled_users.get(event.get_sender_id(), False):
             return
         text = resp.completion_text
         if not text:
@@ -783,9 +832,8 @@ class PersonalityCorePlugin(Star):
             return
 
         session_id = self._get_session_id(event)
-        current = self.favor.get(target_user, session_id)
-        self.favor.update(target_user, fv, current["attitude"], current["relationship"], session_id)
-        yield event.plain_result(f"✅ 已设置用户 {target_user[:12]}... 好感度为 {fv}")
+        self.favor.update(target_user, fv, "中立", "陌生人", session_id)
+        yield event.plain_result(f"✅ 已设置用户 {target_user[-8:] if len(target_user)>8 else target_user} 好感度为 {fv}（印象/关系已重置）")
         event.stop_event()
 
     @filter.command("重置好感")
@@ -821,14 +869,23 @@ class PersonalityCorePlugin(Star):
             n = max(1, min(50, int(num)))
         except (ValueError, TypeError):
             n = 10
-        sorted_users = sorted(self.favor.user_data.items(), key=lambda x: x[1]["favour"], reverse=True)[:n]
+        session_id = self._get_session_id(event)
+        # 按当前会话过滤
+        prefix = f"{session_id}_"
+        session_users = {
+            k[len(prefix):] if k.startswith(prefix) else k: v
+            for k, v in self.favor.user_data.items()
+            if k.startswith(prefix) or "_" not in k
+        }
+        sorted_users = sorted(session_users.items(), key=lambda x: x[1]["favour"], reverse=True)[:n]
         if not sorted_users:
-            yield event.plain_result("📭 暂无好感数据")
+            yield event.plain_result("📭 当前会话暂无好感数据")
             event.stop_event()
             return
         lines = [f"🏆 好感度排行 TOP {n}"]
         for i, (uid, data) in enumerate(sorted_users, 1):
-            lines.append(f"  {i}. {uid[:12]}... {data['favour']} ({data['attitude'][:12]})")
+            display = uid[-8:] if len(uid) > 8 else uid
+            lines.append(f"  {i}. {display} {data['favour']} ({data['attitude'][:10]})")
         yield event.plain_result("\n".join(lines))
         event.stop_event()
 
@@ -838,14 +895,22 @@ class PersonalityCorePlugin(Star):
             n = max(1, min(50, int(num)))
         except (ValueError, TypeError):
             n = 10
-        sorted_users = sorted(self.favor.user_data.items(), key=lambda x: x[1]["favour"])[:n]
+        session_id = self._get_session_id(event)
+        prefix = f"{session_id}_"
+        session_users = {
+            k[len(prefix):] if k.startswith(prefix) else k: v
+            for k, v in self.favor.user_data.items()
+            if k.startswith(prefix) or "_" not in k
+        }
+        sorted_users = sorted(session_users.items(), key=lambda x: x[1]["favour"])[:n]
         if not sorted_users:
-            yield event.plain_result("📭 暂无好感数据")
+            yield event.plain_result("📭 当前会话暂无好感数据")
             event.stop_event()
             return
         lines = [f"💢 负好感度排行 TOP {n}"]
         for i, (uid, data) in enumerate(sorted_users, 1):
-            lines.append(f"  {i}. {uid[:12]}... {data['favour']} ({data['attitude'][:12]})")
+            display = uid[-8:] if len(uid) > 8 else uid
+            lines.append(f"  {i}. {display} {data['favour']} ({data['attitude'][:10]})")
         yield event.plain_result("\n".join(lines))
         event.stop_event()
 
