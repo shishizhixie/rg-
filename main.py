@@ -535,8 +535,11 @@ class PersonalityCorePlugin(Star):
                 json.dump(self.nicknames, f, indent=2, ensure_ascii=False)
 
     def _get_session_id(self, event: AstrMessageEvent) -> str:
-        """永远按会话隔离"""
-        return event.unified_msg_origin
+        """按机器人隔离：同一机器人群聊+私聊共享，不同机器人独立"""
+        umo = getattr(event, 'unified_msg_origin', '')
+        # unified_msg_origin 格式: "bot_name:adapter:conversation_id"
+        # 取冒号前第一段作为 bot 标识
+        return umo.split(':')[0] if ':' in umo else umo
 
     def _get_emotion(self, session_id: str) -> EmotionState:
         """按会话懒加载情绪实例（线程安全）"""
@@ -946,12 +949,12 @@ class PersonalityCorePlugin(Star):
         except (ValueError, TypeError):
             n = 10
         session_id = self._get_session_id(event)
-        # 按当前会话过滤
+        # 按当前机器人过滤（bot_name 作为前缀匹配）
         prefix = f"{session_id}_"
         session_users = {
             k[len(prefix):] if k.startswith(prefix) else k: v
             for k, v in self.favor.user_data.items()
-            if k.startswith(prefix) or "_" not in k
+            if k.startswith(prefix)
         }
         sorted_users = sorted(session_users.items(), key=lambda x: x[1]["favour"], reverse=True)[:n]
         if not sorted_users:
