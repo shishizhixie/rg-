@@ -395,8 +395,8 @@ class FavorManager:
                session_id: str | None = None):
         self.user_data[self._key(user_id, session_id)] = {
             "favour": max(-100, min(100, int(favour))),
-            "attitude": attitude.strip(),
-            "relationship": relationship.strip(),
+            "attitude": attitude.strip()[:24],
+            "relationship": relationship.strip()[:24],
         }
         self._save()
 
@@ -617,7 +617,8 @@ class PersonalityCorePlugin(Star):
             f"{prompt_ger}\n"
             "---\n"
             "文字回复末尾加上标签："
-            "[Emotion:{心情JSON}] [Favour:好感(-100~100),Attitude:中文印象,Relationship:中文关系]\n"
+            "[Emotion:{心情JSON}] [Favour:好感(-100~100),Attitude:2~4字印象,Relationship:2~6字关系]\n"
+            "印象和关系保持简短，不要写长句。"
             "然后【思考】计划→【回复】最终。例："
             "【思考】她心情不好，哄哄她。"
             "【回复】别生气了～"
