@@ -661,18 +661,28 @@ class PersonalityCorePlugin(Star):
 
         # 0) 提取并记录内心思考 【思考】
         think_match = self.THINK_PATTERN.search(text)
+        has_reply_marker = '【回复】' in text
         if think_match:
             thought = think_match.group(1).strip()
             if thought:
                 logger.info(f"💭 内心思考: {thought}")
             if self.think_prefs.get(sender_id, False) and thought:
                 # 用户可见模式：云朵包裹思考，空行+箭头引出回复
-                text = text.replace(think_match.group(0), f"☁️ {thought} ☁️").strip()
-                text = re.sub(r'【回复】\s*', '\n\n➡️ ', text).strip()
+                if has_reply_marker:
+                    text = re.sub(r'【思考】\s*.*?(?=【回复】)', f'☁️ {thought} ☁️', text, flags=re.DOTALL)
+                    text = re.sub(r'【回复】\s*', '\n\n➡️ ', text)
+                else:
+                    # 无【回复】标记 → 只显示思考，保留原文
+                    text = re.sub(r'【思考】\s*', '', text)
+                    text = f'☁️ {thought} ☁️\n\n➡️ {text.strip()}'
             else:
                 # 默认模式：隐藏思考
-                text = text.replace(think_match.group(0), "").strip()
-                text = re.sub(r'【回复】\s*', '', text).strip()
+                if has_reply_marker:
+                    text = re.sub(r'【思考】\s*.*?(?=【回复】)', '', text, flags=re.DOTALL)
+                    text = re.sub(r'【回复】\s*', '', text)
+                else:
+                    text = re.sub(r'【思考】\s*', '', text)
+            text = text.strip()
 
         # 0.5) 清理 LLM 可能 echo 回来的注入文案
         text = re.sub(r'<personality_core>[\s\S]*?</personality_core>', '', text)
