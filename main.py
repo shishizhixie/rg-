@@ -58,8 +58,14 @@ for _ek, _ev in EMOTION_CN.items():
     _EMOTION_CN2EN[_cn] = _ek
 # 补充常见 LLM 变体
 _EMOTION_CN2EN.update({
-    "喜悦": "joy", "爱意": "love", "安心": "relief", "占有": "possessiveness",
-    "贪吃": "lewdness",
+    "喜悦": "joy", "快乐": "joy",
+    "爱意": "love",
+    "无聊": "boredom",
+    "矛盾": "ambivalence",
+    "不信任": "distrust",
+    "安心": "relief",
+    "占有": "possessiveness",
+    "贪吃": "lewdness", "情欲": "lewdness",
 })
 DEFAULT_EMOTIONS = {
     "joy": 50, "sadness": 10, "anger": 10, "fear": 10,
@@ -506,6 +512,22 @@ class PersonalityCorePlugin(Star):
 
         logger.info(f"人格核心: 融合版已加载 | 情绪={'启用' if self.enabled else '禁用'} | 好感=已集成")
 
+    def _resolve_user_id(self, name_or_id: str) -> str:
+        """昵称或 QQ 号 → user_id"""
+        if not name_or_id:
+            return ""
+        if name_or_id.isdigit():
+            return name_or_id
+        # 精确匹配
+        for uid, nick in self.nicknames.items():
+            if nick == name_or_id:
+                return uid
+        # 模糊匹配
+        for uid, nick in self.nicknames.items():
+            if name_or_id in nick:
+                return uid
+        return name_or_id
+
     def _save_nickname(self, user_id: str, name: str):
         if name and name != str(user_id):
             self.nicknames[user_id] = name[:32]
@@ -644,9 +666,11 @@ class PersonalityCorePlugin(Star):
             reply_rule += " " + "，".join(emo_hints) + "。"
 
         # 注入指令
+        nick_hint = f"对方: {self.nicknames.get(user_id, '未知')}\n" if self.nicknames.get(user_id) else ""
         injection = (
             "<personality_core>\n"
             f"心情:{emo.to_json_str()}\n"
+            f"{nick_hint}"
             f"{favor_prompt}\n"
             "</personality_core>\n"
             f"态度({favor_val})：{reply_rule}"
@@ -861,25 +885,7 @@ class PersonalityCorePlugin(Star):
                 event.stop_event()
                 return
             name_or_id = " ".join(parts[:-1])
-            # 纯数字 → QQ号直接用
-            if name_or_id.isdigit():
-                target_user = name_or_id
-            else:
-                # 尝试从昵称反查 user_id
-                found = None
-                for uid, nick in self.nicknames.items():
-                    if nick == name_or_id:
-                        found = uid
-                        break
-                if found:
-                    target_user = found
-                else:
-                    # 模糊匹配
-                    for uid, nick in self.nicknames.items():
-                        if name_or_id in nick:
-                            found = uid
-                            break
-                    target_user = found or name_or_id
+            target_user = self._resolve_user_id(name_or_id)
 
         if fv is None or not target_user:
             yield event.plain_result("用法: 设置好感 数值 或 设置好感 user_id 数值\n数值范围 -100 ~ 100")
@@ -888,26 +894,32 @@ class PersonalityCorePlugin(Star):
 
         session_id = self._get_session_id(event)
         self.favor.update(target_user, fv, "中立", "陌生人", session_id)
-        yield event.plain_result(f"✅ 已设置用户 {target_user[-8:] if len(target_user)>8 else target_user} 好感度为 {fv}（印象/关系已重置）")
+        name = self.nicknames.get(target_user, target_user[-8:] if len(target_user)>8 else target_user)
+        yield event.plain_result(f"✅ 已设置 {name} 好感度为 {fv}（印象/关系已重置）")
         event.stop_event()
 
     @filter.command("重置好感")
     async def cmd_reset_favor(self, event: AstrMessageEvent, user_id: str = ""):
-        """重置指定用户的好感度。用法: 重置好感 [user_id]"""
+        """重置指定用户的好感度。用法: 重置好感 [QQ号/昵称]"""
         if not user_id:
             user_id = event.get_sender_id()
+        else:
+            user_id = self._resolve_user_id(user_id)
         session_id = self._get_session_id(event)
         if self.favor.delete(user_id, session_id):
-            yield event.plain_result(f"🔄 已重置用户 {user_id[:12]}... 的好感度")
+            name = self.nicknames.get(user_id, user_id[-8:] if len(user_id)>8 else user_id)
+            yield event.plain_result(f"🔄 已重置 {name} 的好感度")
         else:
-            yield event.plain_result(f"📭 用户 {user_id[:12]}... 没有好感数据")
+            yield event.plain_result(f"📭 用户 {user_id} 没有好感数据")
         event.stop_event()
 
     @filter.command("查询好感")
     async def cmd_query_favor(self, event: AstrMessageEvent, user_id: str = ""):
-        """查询指定用户的好感度。用法: 查询好感 [user_id]"""
+        """查询指定用户的好感度。用法: 查询好感 [QQ号/昵称]"""
         if not user_id:
             user_id = event.get_sender_id()
+        else:
+            user_id = self._resolve_user_id(user_id)
         session_id = self._get_session_id(event)
         s = self.favor.get(user_id, session_id)
         name = self.nicknames.get(user_id, user_id[-8:] if len(user_id) > 8 else user_id)
